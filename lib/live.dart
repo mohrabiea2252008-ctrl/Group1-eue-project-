@@ -1,15 +1,3 @@
-// PART 4 | TECH LEAD (Ahmed): live price fetching.
-// Fetches prices from the web every time the app opens (and every 15 min while
-// it is open), turns them into Listings, and caches them on the device.
-//
-// Two fetchers:
-//   HttpFetcher       plain HTTP (fast, works for server-rendered pages)
-//   WebFetchService   a hidden WebView that runs the page's JavaScript, so it
-//                     works for single-page apps and many bot-protected sites
-//
-// IMPORTANT: the parsers are generic (JSON-LD, embedded JSON, product cards,
-// price-node detection). Check the Sources tab in the app: it shows how many
-// items each source returned and why one failed.
 import 'dart:async';
 import 'dart:convert';
 
@@ -144,37 +132,6 @@ bool _isOld(dom.Element e) {
   return false;
 }
 
-
-/// First usable <img> inside a card (handles lazy-loading attributes and srcset).
-String? _imgOf(dom.Element? card, String pageUrl) {
-  if (card == null) return null;
-  for (final img in card.querySelectorAll('img')) {
-    var src = img.attributes['src'] ?? img.attributes['data-src'] ?? img.attributes['data-lazy-src'] ?? '';
-    if (src.isEmpty || src.startsWith('data:')) {
-      final ss = img.attributes['srcset'] ?? img.attributes['data-srcset'] ?? '';
-      if (ss.isNotEmpty) src = ss.split(',').first.trim().split(' ').first;
-    }
-    if (src.isEmpty || src.startsWith('data:') || src.endsWith('.svg')) continue;
-    try {
-      return Uri.parse(pageUrl).resolve(src).toString();
-    } catch (_) {}
-  }
-  return null;
-}
-
-/// Image URL from a JSON object (schema.org "image", "imageUrl", Noon "image_key"...).
-String? _jsonImage(Map<String, dynamic> m) {
-  for (final k in ['image', 'imageUrl', 'image_url', 'thumbnail', 'thumbnailUrl', 'images']) {
-    var v = m[k];
-    if (v is List && v.isNotEmpty) v = v.first;
-    if (v is Map) v = v['url'];
-    if (v is String && v.startsWith('http')) return v;
-  }
-  final key = m['image_key'];
-  if (key is String && key.isNotEmpty) return 'https://f.nooncdn.com/p/$key.jpg';
-  return null;
-}
-
 int _linkCount(dom.Element e, RegExp re) =>
     e.querySelectorAll('a[href]').map((a) => a.attributes['href'] ?? '').where(re.hasMatch).toSet().length;
 
@@ -219,14 +176,7 @@ List<Listing> extractCards(dom.Document doc,
     final cat = Classifier.category(title) ?? fallback;
     if (cat == null) continue;
     out.add(Listing(
-        feed: feed,
-        store: store,
-        title: title,
-        url: url,
-        category: cat,
-        price: price,
-        inStock: !_oos.hasMatch(card.text),
-        imageUrl: _imgOf(card, pageUrl)));
+        feed: feed, store: store, title: title, url: url, category: cat, price: price, inStock: !_oos.hasMatch(card.text)));
   }
   return out;
 }
@@ -300,7 +250,7 @@ List<Listing> extractByPriceNodes(dom.Document doc,
     if (!seen.add('$title|$price|$url')) continue;
     final host = Uri.tryParse(url)?.host ?? '';
     final st = storeFromHost && host.isNotEmpty && host != pageHost ? host.replaceFirst('www.', '') : store;
-    out.add(Listing(feed: feed, store: st, title: title, url: url, category: cat, price: price, inStock: !_oos.hasMatch(card.text), imageUrl: _imgOf(card, pageUrl)));
+    out.add(Listing(feed: feed, store: st, title: title, url: url, category: cat, price: price, inStock: !_oos.hasMatch(card.text)));
   }
   return out;
 }
@@ -341,7 +291,7 @@ List<Listing> extractJson(dom.Document doc,
     {required String pageUrl, required String feed, required String store, String? fallback, String pageTitle = ''}) {
   final out = <Listing>[];
   final seen = <String>{};
-  void add(String name, double price, String? url, bool inStock, [String? image]) {
+  void add(String name, double price, String? url, bool inStock) {
     final n = _ws(name);
     if (n.length < 3 || price < 5) return;
     var title = n;
@@ -349,7 +299,7 @@ List<Listing> extractJson(dom.Document doc,
     final cat = Classifier.category(title) ?? fallback;
     if (cat == null) return;
     if (!seen.add('$title|$price')) return;
-    out.add(Listing(feed: feed, store: store, title: title, url: url ?? pageUrl, category: cat, price: price, inStock: inStock, imageUrl: image));
+    out.add(Listing(feed: feed, store: store, title: title, url: url ?? pageUrl, category: cat, price: price, inStock: inStock));
   }
 
   for (final s in doc.querySelectorAll('script')) {
@@ -370,13 +320,13 @@ List<Listing> extractJson(dom.Document doc,
         if (p != null) {
           final off = m['offers'];
           final av = (off is Map ? off['availability'] : null)?.toString() ?? '';
-          add('${m['name'] ?? ''}', p, m['url']?.toString(), !av.contains('OutOfStock'), _jsonImage(m));
+          add('${m['name'] ?? ''}', p, m['url']?.toString(), !av.contains('OutOfStock'));
         }
         return;
       }
       final name = m['name'] ?? m['title'] ?? m['label'] ?? m['displayName'];
       final price = _num(m['price'] ?? m['sellingPrice'] ?? m['salePrice'] ?? m['amount']);
-      if (name is String && price != null) add(name, price, null, m['inStock'] != false && m['available'] != false, _jsonImage(m));
+      if (name is String && price != null) add(name, price, null, m['inStock'] != false && m['available'] != false);
     });
   }
   return out;
@@ -562,12 +512,6 @@ class Carry1stSource extends LiveSource {
       final title = _ws(d.querySelector('h1')?.text ?? '');
       var r = extractJson(d, pageUrl: u, feed: name, store: 'Carry1st', fallback: 'Top-ups', pageTitle: title);
       if (r.isEmpty) r = extractByPriceNodes(d, pageUrl: u, feed: name, store: 'Carry1st', fallback: 'Top-ups');
-      final og = d.querySelector('meta[property="og:image"]')?.attributes['content'];
-      if (og != null && og.isNotEmpty) {
-        r = r
-            .map((x) => x.imageUrl != null ? x : Listing(feed: x.feed, store: x.store, title: x.title, url: x.url, category: x.category, price: x.price, inStock: x.inStock, imageUrl: og))
-            .toList();
-      }
       return r;
     });
     return res.expand((e) => e).toList();
@@ -599,108 +543,11 @@ class PriceEngineSource extends LiveSource {
   }
 }
 
-
-// ---------------------------------------------------------------------------
-// Amazon Egypt and Noon Egypt (search pages) + product images
-// ---------------------------------------------------------------------------
-/// Amazon.eg search results page: title, price, photo and /dp/ link for each result.
-List<Listing> parseAmazon(dom.Document d, String pageUrl, {String? fallback}) {
-  final out = <Listing>[];
-  final seen = <String>{};
-  for (final r in d.querySelectorAll('div[data-component-type="s-search-result"]')) {
-    final asin = r.attributes['data-asin'] ?? '';
-    if (asin.isEmpty || !seen.add(asin)) continue;
-    final title = _ws(r.querySelector('h2')?.text ?? '');
-    if (title.length < 4) continue;
-    final price = parsePrice(r.querySelector('span.a-price span.a-offscreen')?.text ?? r.querySelector('span.a-price')?.text ?? '');
-    if (price == null) continue;
-    out.add(Listing(
-      feed: 'Amazon EG',
-      store: 'Amazon EG',
-      title: title,
-      url: 'https://www.amazon.eg/dp/$asin',
-      category: Classifier.category(title) ?? fallback ?? 'Electronics',
-      price: price,
-      imageUrl: r.querySelector('img.s-image')?.attributes['src'],
-    ));
-  }
-  if (out.isEmpty && d.querySelectorAll('div[data-component-type="s-search-result"]').isEmpty) return [];
-  return out;
-}
-
-/// Noon.com Egypt search page: reads the product list embedded in __NEXT_DATA__.
-List<Listing> parseNoon(dom.Document d, String pageUrl, {String? fallback}) {
-  final out = <Listing>[];
-  final seen = <String>{};
-  for (final sc in d.querySelectorAll('script')) {
-    if (sc.attributes['id'] != '__NEXT_DATA__') continue;
-    dynamic j;
-    try {
-      j = jsonDecode(sc.text);
-    } catch (_) {
-      continue;
-    }
-    _walk(j, (m) {
-      final name = m['name'];
-      final sku = m['sku']?.toString();
-      final price = _num(m['sale_price']) ?? _num(m['price']);
-      if (name is String && sku != null && price != null && price >= 5 && seen.add(sku)) {
-        final slug = m['url']?.toString();
-        out.add(Listing(
-          feed: 'Noon EG',
-          store: 'Noon EG',
-          title: _ws(name),
-          url: slug != null && slug.isNotEmpty
-              ? 'https://www.noon.com/egypt-en/$slug/$sku/p/'
-              : 'https://www.noon.com/egypt-en/search/?q=${Uri.encodeQueryComponent(name)}',
-          category: Classifier.category(name) ?? fallback ?? 'Electronics',
-          price: price,
-          imageUrl: _jsonImage(m),
-        ));
-      }
-    });
-  }
-  if (out.isEmpty) return extractByPriceNodes(d, pageUrl: pageUrl, feed: 'Noon EG', store: 'Noon EG', fallback: fallback ?? 'Electronics');
-  return out;
-}
-
-class AmazonEgyptSource extends LiveSource {
-  @override
-  String get name => 'Amazon EG';
-  static const queries = ['rtx graphics card', 'ryzen processor', 'ddr5 ram', 'gift card', 'playstation controller'];
-
-  @override
-  Future<List<Listing>> fetch(Ctx c) async {
-    final out = <Listing>[];
-    for (final q in queries) {
-      final url = 'https://www.amazon.eg/s?k=${Uri.encodeQueryComponent(q)}';
-      out.addAll((await c.scrape(url, (d) => parseAmazon(d, url))).take(20));
-    }
-    return out;
-  }
-}
-
-class NoonEgyptSource extends LiveSource {
-  @override
-  String get name => 'Noon EG';
-  static const queries = ['rtx graphics card', 'ryzen processor', 'ddr5 ram', 'gift card', 'playstation controller'];
-
-  @override
-  Future<List<Listing>> fetch(Ctx c) async {
-    final out = <Listing>[];
-    for (final q in queries) {
-      final url = 'https://www.noon.com/egypt-en/search/?q=${Uri.encodeQueryComponent(q)}';
-      out.addAll((await c.scrape(url, (d) => parseNoon(d, url))).take(20));
-    }
-    return out;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Repository: refresh, cache, history, alert targets
 // ---------------------------------------------------------------------------
 class LiveRepository {
-  final List<LiveSource> sources = [Games2EgyptSource(), EgyptGameStoreSource(), Carry1stSource(), PriceEngineSource(), AmazonEgyptSource(), NoonEgyptSource()];
+  final List<LiveSource> sources = [Games2EgyptSource(), EgyptGameStoreSource(), Carry1stSource(), PriceEngineSource()];
 
   Future<Map<String, List<Listing>>> _cacheMap() async {
     try {
@@ -715,67 +562,6 @@ class LiveRepository {
     } catch (_) {
       return {};
     }
-  }
-
-  // ---- on-demand search and product images (Amazon EG + Noon EG) ----
-  Future<List<Listing>> searchOnline(String q) async {
-    final ctx = Ctx(HttpFetcher(), WebFetchService.instance);
-    final e = Uri.encodeQueryComponent(q);
-    final urlA = 'https://www.amazon.eg/s?k=$e';
-    final urlN = 'https://www.noon.com/egypt-en/search/?q=$e';
-    final res = await Future.wait([
-      ctx.scrape(urlA, (d) => parseAmazon(d, urlA)).catchError((_) => <Listing>[]),
-      ctx.scrape(urlN, (d) => parseNoon(d, urlN)).catchError((_) => <Listing>[]),
-    ]);
-    return [...res[0].take(15), ...res[1].take(15)];
-  }
-
-  final Map<String, String?> _imgCache = {};
-  Future<void> _imgQueue = Future<void>.value();
-  int _imgLookups = 0;
-
-  Future<void> loadImages() async {
-    try {
-      final raw = (await SharedPreferences.getInstance()).getString('images_v1');
-      if (raw == null) return;
-      (jsonDecode(raw) as Map<String, dynamic>).forEach((k, v) => _imgCache[k] = v as String?);
-    } catch (_) {}
-  }
-
-  /// Looks up a photo for a product by searching Amazon EG / Noon EG.
-  /// Only accepts a result whose title shares at least half the words of the query.
-  Future<String?> imageFor(String query) {
-    final key = query.toLowerCase().trim();
-    if (_imgCache.containsKey(key)) return Future.value(_imgCache[key]);
-    if (_imgLookups >= 60) return Future.value(null);
-    final c = Completer<String?>();
-    _imgQueue = _imgQueue.then((_) async {
-      if (_imgCache.containsKey(key)) {
-        c.complete(_imgCache[key]);
-        return;
-      }
-      _imgLookups++;
-      String? url;
-      try {
-        final want = Classifier.normTokens(query).toSet();
-        for (final l in await searchOnline(query)) {
-          if (l.imageUrl == null || want.isEmpty) continue;
-          final have = Classifier.normTokens(l.title).toSet();
-          if (want.intersection(have).length / want.length >= 0.5) {
-            url = l.imageUrl;
-            break;
-          }
-        }
-      } catch (_) {}
-      _imgCache[key] = url;
-      try {
-        final found = {for (final e in _imgCache.entries) if (e.value != null) e.key: e.value};
-        (await SharedPreferences.getInstance()).setString('images_v1', jsonEncode(found));
-      } catch (_) {}
-      c.complete(url);
-      await Future<void>.delayed(const Duration(milliseconds: 600));
-    });
-    return c.future;
   }
 
   Future<List<Listing>> loadCache() async => (await _cacheMap()).values.expand((e) => e).toList();

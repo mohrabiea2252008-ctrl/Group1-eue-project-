@@ -1,7 +1,3 @@
-// Sa3ar: Egyptian Multi-Store Price Tracker (CN3071)
-// Live prices: GPU/CPU/RAM (price-engine.com), gift cards and recharge
-// (egyptgamestore.com, games2egypt.com, shop.carry1st.com). Fetched on every app
-// open and every 15 minutes while open. See the Sources tab for fetch status.
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -19,9 +15,6 @@ void main() {
   runApp(const Sa3arApp());
 }
 
-// ===========================================================================
-// PART 4 | TECH LEAD (Ahmed): app state, live refresh, history, alerts
-// ===========================================================================
 class AppState extends ChangeNotifier {
   final bool live;
   AppState({this.live = true});
@@ -38,9 +31,6 @@ class AppState extends ChangeNotifier {
   Map<String, List<double>> histories = {};
   final Set<String> _alerted = {};
   Timer? _timer;
-  final List<Listing> _listings = [];
-  final List<Listing> _extra = []; // results from on-demand Amazon EG / Noon EG searches
-  bool searchingOnline = false;
 
   void initDemo() {
     products = buildCatalog();
@@ -54,7 +44,6 @@ class AppState extends ChangeNotifier {
   Future<void> init() async {
     final cached = await repo.loadCache();
     histories = await repo.loadHistories();
-    await repo.loadImages();
     targets
       ..clear()
       ..addAll(await repo.loadTargets());
@@ -72,44 +61,8 @@ class AppState extends ChangeNotifier {
   }
 
   void _rebuild(List<Listing> ls) {
-    _listings
-      ..clear()
-      ..addAll(ls);
-    products = ProductMatcher.group([..._listings, ..._extra], histories);
+    products = ProductMatcher.group(ls, histories);
     engine = SearchEngine(products);
-  }
-
-  /// Searches Amazon EG and Noon EG for whatever the user typed and adds the results.
-  Future<int> searchOnline(String q) async {
-    if (!live || searchingOnline) return 0;
-    searchingOnline = true;
-    notifyListeners();
-    var n = 0;
-    try {
-      final r = await repo.searchOnline(q);
-      n = r.length;
-      _extra.addAll(r);
-      _rebuild(List.of(_listings));
-    } catch (e) {
-      debugPrint('online search failed: $e');
-    }
-    searchingOnline = false;
-    notifyListeners();
-    return n;
-  }
-
-  /// Photo for a product: from its store listings, or looked up on Amazon EG / Noon EG.
-  Future<String?> imageFor(Product p) async {
-    for (final o in p.offers) {
-      if (o.imageUrl != null) {
-        p.imageUrl = o.imageUrl;
-        return o.imageUrl;
-      }
-    }
-    if (!live) return null;
-    final u = await repo.imageFor(p.name);
-    if (u != null) p.imageUrl = u;
-    return u;
   }
 
   Future<void> refresh() async {
@@ -610,59 +563,6 @@ class _ShellState extends State<Shell> {
 // ---------------------------------------------------------------------------
 // Screen 2: Search
 // ---------------------------------------------------------------------------
-
-/// Product photo: uses the store's image, or looks one up on Amazon EG / Noon EG.
-class ProductImage extends StatefulWidget {
-  final AppState state;
-  final Product product;
-  final double size;
-  final double radius;
-  const ProductImage({super.key, required this.state, required this.product, this.size = 52, this.radius = 14});
-  @override
-  State<ProductImage> createState() => _ProductImageState();
-}
-
-class _ProductImageState extends State<ProductImage> {
-  String? url;
-
-  @override
-  void initState() {
-    super.initState();
-    url = widget.product.imageUrl;
-    if (url == null) _fetch();
-  }
-
-  Future<void> _fetch() async {
-    final u = await widget.state.imageFor(widget.product);
-    if (mounted && u != null) setState(() => url = u);
-  }
-
-  Widget _placeholder() => Container(
-        width: widget.size,
-        height: widget.size,
-        color: catColor(widget.product.category),
-        child: Icon(catIcon(widget.product.category), color: kInk, size: widget.size * 0.45),
-      );
-
-  @override
-  Widget build(BuildContext context) => ClipRRect(
-        borderRadius: BorderRadius.circular(widget.radius),
-        child: url == null
-            ? _placeholder()
-            : Container(
-                width: widget.size,
-                height: widget.size,
-                color: Colors.white,
-                child: Image.network(
-                  url!,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => _placeholder(),
-                  loadingBuilder: (c, child, p) => p == null ? child : _placeholder(),
-                ),
-              ),
-      );
-}
-
 class StatCard extends StatelessWidget {
   final IconData icon;
   final String label, value, tag;
@@ -775,38 +675,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Text('Pay with', style: TextStyle(color: kMuted, fontSize: 12)),
                     ),
                     PayMethodChips(st),
-                    if (query.trim().length >= 3)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                        child: WhiteCard(
-                          color: kSageSoft,
-                          child: Row(children: [
-                            const Icon(Icons.travel_explore, color: kSageDark),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text('Search Amazon EG and Noon EG for "${query.trim()}"',
-                                  style: const TextStyle(fontWeight: FontWeight.w600, color: kInk, fontSize: 13)),
-                            ),
-                            const SizedBox(width: 8),
-                            st.searchingOnline
-                                ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5))
-                                : FilledButton(
-                                    style: FilledButton.styleFrom(backgroundColor: kInk, foregroundColor: Colors.white, shape: const StadiumBorder()),
-                                    onPressed: st.live
-                                        ? () async {
-                                            final n = await st.searchOnline(query.trim());
-                                            if (!context.mounted) return;
-                                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                                content: Text(n == 0
-                                                    ? 'No results from Amazon EG or Noon EG (they may be blocking the app)'
-                                                    : 'Added $n results from Amazon EG and Noon EG')));
-                                          }
-                                        : null,
-                                    child: const Text('Search'),
-                                  ),
-                          ]),
-                        ),
-                      ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                       child: Row(children: [
@@ -863,7 +731,7 @@ class ProductTile extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(16, 6, 16, 6),
       onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ProductScreen(state: state, product: product))),
       child: Row(children: [
-        ProductImage(state: state, product: product, size: 52),
+        CircleAvatar(radius: 24, backgroundColor: catColor(product.category), child: Icon(catIcon(product.category), color: kInk, size: 22)),
         const SizedBox(width: 12),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -967,10 +835,6 @@ class ProductScreen extends StatelessWidget {
                   child: Text('Pay with', style: TextStyle(color: kMuted, fontSize: 12)),
                 ),
                 PayMethodChips(state),
-                WhiteCard(
-                  margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  child: Center(child: ProductImage(state: state, product: product, size: 150, radius: 18)),
-                ),
                 if (best != null) _breakdown(best, m),
                 if (best != null && sticker != null && sticker < best.total(m) - 0.01)
                   WhiteCard(

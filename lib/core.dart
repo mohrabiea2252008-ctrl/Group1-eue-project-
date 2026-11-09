@@ -1,4 +1,3 @@
-// PART 4 | TECH LEAD (Ahmed): models, search engine, price engine, product matching
 import 'dart:math' as math;
 
 enum PayMethod { wallet, instapay, fawry, card }
@@ -30,7 +29,6 @@ class Offer {
   final String? title; // listing title from the store (live data)
   final String? url; // direct product page
   final bool inStock;
-  final String? imageUrl;
 
   Offer({
     required this.store,
@@ -44,7 +42,6 @@ class Offer {
     this.title,
     this.url,
     this.inStock = true,
-    this.imageUrl,
   });
 
   bool accepts(PayMethod m) => fees.containsKey(m);
@@ -59,7 +56,6 @@ class Product {
   final List<String> aliases;
   final List<Offer> offers;
   final List<double> history;
-  String? imageUrl; // product photo (from a store listing or an image lookup)
   Product({
     required this.id,
     required this.name,
@@ -67,7 +63,6 @@ class Product {
     required this.offers,
     required this.history,
     this.aliases = const [],
-    this.imageUrl,
   });
 }
 
@@ -363,7 +358,6 @@ class Listing {
   final String feed, store, title, url, category;
   final double price;
   final bool inStock;
-  final String? imageUrl;
   const Listing({
     required this.feed,
     required this.store,
@@ -372,7 +366,6 @@ class Listing {
     required this.category,
     required this.price,
     this.inStock = true,
-    this.imageUrl,
   });
 
   Map<String, dynamic> toJson() => {
@@ -383,7 +376,6 @@ class Listing {
         'category': category,
         'price': price,
         'inStock': inStock,
-        'imageUrl': imageUrl,
       };
 
   factory Listing.fromJson(Map<String, dynamic> j) => Listing(
@@ -394,7 +386,6 @@ class Listing {
         category: j['category'] as String,
         price: (j['price'] as num).toDouble(),
         inStock: j['inStock'] as bool? ?? true,
-        imageUrl: j['imageUrl'] as String?,
       );
 }
 
@@ -479,7 +470,7 @@ class Classifier {
 }
 
 class StoreProfile {
-  static const verifiedStores = {'Games2Egypt', 'Egypt Game Store', 'Carry1st', 'Amazon EG', 'Noon EG', 'sigma-computer.com', 'amazon.eg', 'noon.com', 'btech.com'};
+  static const verifiedStores = {'Games2Egypt', 'Egypt Game Store', 'Carry1st', 'sigma-computer.com', 'amazon.eg', 'noon.com', 'btech.com'};
   static bool isVerified(String store) => verifiedStores.contains(store);
 
   /// TODO(Ahmed): replace with real gateway fees per store once confirmed.
@@ -503,7 +494,6 @@ class ProductMatcher {
       title: l.title,
       url: l.url,
       inStock: l.inStock,
-      imageUrl: l.imageUrl,
       verified: StoreProfile.isVerified(l.store),
       delivery: hw ? 'Standard delivery' : 'Instant code',
       deliveryRank: hw ? 3 : 0,
@@ -544,7 +534,6 @@ class ProductMatcher {
         offers: items.map(_toOffer).toList(),
         aliases: titles.toSet().take(12).toList(),
         history: List<double>.from(histories[id] ?? const <double>[]),
-        imageUrl: items.map((e) => e.imageUrl).firstWhere((u) => u != null, orElse: () => null),
       ));
     });
     out.sort((a, b) {
